@@ -13,6 +13,7 @@ if (!p.platform || !p.arch || !version || !p.product) {
     return;
 }
 
+var isWin = p.platform === 'win32'
 
 function go(platform, arch, version, product, cb) {
     var dir = product + "-" + platform + '-' + arch;
@@ -37,8 +38,33 @@ function go(platform, arch, version, product, cb) {
         }
     };
 
+    if (isWin) {
+        var subDir = dir + '/' + base;
+        var fullDir = subDir + '/bin';
+        delete package.scripts.preinstall;
+        package.files = ['node.exe', 'node.lib'];
+        package.bin = {
+          node: './node.exe'
+        };
+        if (product == 'iojs') {
+          package.bin.iojs = './iojs.exe';
+          package.files.push('iojs.exe');
+          package.files.push('iojs.lib');
+        }
+    }
+
     if (product == "iojs") {
         package.bin.iojs = path.join(base, "bin/iojs");
+    }
+
+    if (isWin) {
+        var opts = {
+            product: product,
+            platform: platform,
+            arch: arch,
+            version: version
+        };
+        return getWin(opts, dir, package, cb);
     }
 
     fs.mkdir(dir, function (err) {
@@ -58,6 +84,61 @@ function go(platform, arch, version, product, cb) {
                 });
             });
         });
+    });
+}
+
+function getWin(opts, dir, package, cb) {
+    var isIO = opts.product === 'iojs';
+
+    var filenames = ['node.exe', 'node.lib'];
+
+    function next() {
+      if (!filenames.length) {
+          return fs.writeFile(path.join(dir, 'package.json'), JSON.stringify(package, null, 2), function (err) {
+              return cb(err);
+          });
+      }
+
+      var item = filenames.shift();
+
+      getAndWriteFile(dir, opts, item, function (err) {
+          if (err) return cb(err);
+          next()
+      })
+    }
+
+    fs.mkdir(dir, function (err) {
+        if (err && err.code != 'EEXIST') {
+            return cb(err);
+        }
+
+        next();
+    });
+}
+
+// for windows
+// need to get /win-{x86,x64}/iojs.{exe,lib} for iojs
+// need to get /node.{exe,lib} or /x86/node.{exe,lib} for node
+function getAndWriteFile(dir, opts, filename, cb) {
+    var isIO = opts.product === 'iojs';
+    var urlpath = isIO
+      ? 'win' + opts.arch + '/' + filename
+      : opts.arch === 'x86'
+      ? filename
+      : 'x64/' + filename;
+
+    var options = {
+        hostname: opts.product === 'iojs' ? 'iojs.org' : 'nodejs.org',
+        path: '/dist/v' + opts.version + '/' + urlpath
+    };
+
+    var req = https.get(options);
+    req.on('error', cb);
+    req.on('response', function (res) {
+        if (res.statusCode != 200) return cb("not ok: " + res.statusCode);
+        res.pipe(fs.createWriteStream(path.join(dir, filename))).on('error', function (err) {
+            return cb(err);
+        }).on('finish', cb);
     });
 }
 
